@@ -131,9 +131,19 @@ info "Writing OVOS configuration..."
 MIC_DEVICE="${MIC_DEVICE:-plughw:2,0}"
 
 sudo -u pi mkdir -p "$CONFIG_DIR"
+# Sound files live in ovos-dinkum-listener's package, but ovos-audio resolves
+# paths relative to its own package (which has no res/snd/). Use absolute paths.
+SOUND_DIR="$VENV/lib/python3.13/site-packages/ovos_dinkum_listener/res/snd"
+
 sudo -u pi tee "$CONFIG_DIR/mycroft.conf" > /dev/null <<CONF
 {
   "lang": "en-us",
+  "confirm_listening": true,
+  "sounds": {
+    "start_listening": "$SOUND_DIR/start_listening.wav",
+    "acknowledge": "$SOUND_DIR/acknowledge.mp3",
+    "error": "$SOUND_DIR/error.mp3"
+  },
   "listener": {
     "wake_word": "hey_mycroft",
     "microphone": {
@@ -148,6 +158,7 @@ sudo -u pi tee "$CONFIG_DIR/mycroft.conf" > /dev/null <<CONF
       "module": "ovos-ww-plugin-precise-onnx",
       "model": "https://github.com/OpenVoiceOS/precise-lite-models/raw/master/wakewords/en/hey_mycroft.onnx",
       "listen": true,
+      "sound": "$SOUND_DIR/start_listening.wav",
       "sensitivity": 0.5
     }
   },
@@ -230,11 +241,46 @@ systemctl restart systemd-journald
 ok "Journald configured (50MB cap, 7-day retention)."
 
 # -------------------------------------------------------------------
-# 8. Systemd services
+# 8. Bluetooth speaker (AT-SP3X)
+# -------------------------------------------------------------------
+# The AT-SP3X doesn't appear in the desktop Bluetooth UI, so we pair and
+# trust it via bluetoothctl. Once trusted, BlueZ auto-connects on boot
+# whenever the speaker is powered on and in range.
+#
+# Speaker details:
+#   Name:  AT-SP3X (Audio-Technica portable speaker)
+#   MAC:   CC:E8:0B:B4:19:9D
+#   UUID:  Audio Sink (0000110b-0000-1000-8000-00805f9b34fb)
+#   Class: 0x00240414
+BT_MAC="CC:E8:0B:B4:19:9D"
+BT_NAME="AT-SP3X"
+
+info "Configuring Bluetooth speaker ($BT_NAME)..."
+
+# Ensure Bluetooth is powered on
+bluetoothctl power on
+
+# Trust the device so BlueZ auto-connects on future boots
+bluetoothctl trust "$BT_MAC"
+
+# Attempt to connect (may fail if speaker is off — that's OK)
+if bluetoothctl connect "$BT_MAC" 2>/dev/null; then
+    ok "Bluetooth speaker $BT_NAME connected."
+else
+    echo -e "${CYAN}[pi-voice]${NC} $BT_NAME not reachable now — will auto-connect when powered on."
+fi
+
+# -------------------------------------------------------------------
+# 9. Systemd services
 # -------------------------------------------------------------------
 info "Installing systemd services..."
 
-cat > /etc/systemd/system/ovos-messagebus.service <<'SVC'
+# PipeWire runs as a user service (uid 1000). System services need these
+# environment variables to connect to the user's PipeWire session for audio
+# input (microphone) and output (Bluetooth speaker / HDMI / 3.5mm).
+PIPEWIRE_ENV="Environment=XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"
+
+cat > /etc/systemd/system/ovos-messagebus.service <<SVC
 [Unit]
 Description=OVOS Message Bus
 After=network.target
@@ -251,7 +297,7 @@ RestartSec=5
 WantedBy=multi-user.target
 SVC
 
-cat > /etc/systemd/system/ovos-listener.service <<'SVC'
+cat > /etc/systemd/system/ovos-listener.service <<SVC
 [Unit]
 Description=OVOS Dinkum Listener
 After=network.target ovos-messagebus.service
@@ -261,6 +307,7 @@ Requires=ovos-messagebus.service
 Type=simple
 User=pi
 Group=pi
+$PIPEWIRE_ENV
 ExecStart=/opt/pi-voice/.venv/bin/ovos-dinkum-listener
 Restart=always
 RestartSec=10
@@ -269,7 +316,7 @@ RestartSec=10
 WantedBy=multi-user.target
 SVC
 
-cat > /etc/systemd/system/ovos-audio.service <<'SVC'
+cat > /etc/systemd/system/ovos-audio.service <<SVC
 [Unit]
 Description=OVOS Audio Service
 After=network.target ovos-messagebus.service
@@ -279,6 +326,7 @@ Requires=ovos-messagebus.service
 Type=simple
 User=pi
 Group=pi
+$PIPEWIRE_ENV
 ExecStart=/opt/pi-voice/.venv/bin/ovos-audio
 Restart=always
 RestartSec=10
@@ -287,7 +335,7 @@ RestartSec=10
 WantedBy=multi-user.target
 SVC
 
-cat > /etc/systemd/system/ovos-core.service <<'SVC'
+cat > /etc/systemd/system/ovos-core.service <<SVC
 [Unit]
 Description=OVOS Core (skills + intent engine)
 After=network.target ovos-messagebus.service
