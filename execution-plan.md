@@ -16,14 +16,15 @@ comparison, component rationale, and open questions, see
 4. ~~Implement pi.conf~~ Done: 4 flags (database, workers, desktop, vnc)
 5. ~~Deploy to Pi~~ Done: 864 MB used, 3.1 GB available after optimization
 
-### Phase 1: Voice loop — IN PROGRESS
+### Phase 1: Voice loop — COMPLETE
 
 1. ~~Verify webcam mic works on Pi~~ Done: card 2, plughw:2,0, 16kHz mono capture OK
 2. ~~Install OVOS components via pip~~ Done: see [pi-voice-setup.sh](pi-voice-setup.sh)
 3. ~~Get wake word + VAD + STT + TTS configured~~ Done: listener starts, wake word loop running
-4. **TODO: Create systemd services for OVOS (messagebus, listener, audio, core)**
-5. **TODO: Verify end-to-end: say "hey mycroft" → STT → intent → TTS response**
-6. **TODO: Test Whisper STT on Hailo (move from CPU to NPU)**
+4. ~~Create systemd services for OVOS~~ Done: messagebus, listener, audio, core — all enabled and auto-starting
+5. ~~Verify end-to-end~~ Done (2026-04-22): "hey mycroft" → wake word detected → STT transcribed "How are you" → padacioso matched HowAreYou.intent → TTS spoke "Pretty well"
+6. **TODO: Connect a speaker to hear TTS output**
+7. **TODO: Test Whisper STT on Hailo (move from CPU to NPU)**
 
 ### Phase 2: First skill
 
@@ -42,8 +43,10 @@ comparison, component rationale, and open questions, see
 
 ### Backlog
 
+- Integration test framework (messagebus-level tests for skills, pipeline, STT/TTS)
 - Fix Google OAuth login on Good Morning (broken, pre-dates re-imaging)
 - Slideshow mode tweaks
+- Connect speaker and verify TTS audio output
 - Wake word customization (switch from "hey mycroft" to a custom word)
 
 ---

@@ -44,7 +44,8 @@ apt-get install -y -qq \
     portaudio19-dev \
     python3-dev \
     swig \
-    libasound2-dev
+    libasound2-dev \
+    espeak-ng
 
 ok "System dependencies installed."
 
@@ -79,6 +80,9 @@ sudo -u pi $PIP install -q \
 # Install dinkum listener without broken dependency chain
 sudo -u pi $PIP install -q ovos-dinkum-listener
 
+# Intent pipeline: adapt parser (IntentBuilder-based skills need this)
+sudo -u pi $PIP install -q ovos-adapt-parser
+
 ok "OVOS core installed."
 
 # -------------------------------------------------------------------
@@ -103,6 +107,19 @@ sudo -u pi $PIP install -q ovos-stt-plugin-fasterwhisper
 sudo -u pi $PIP install -q ovos-tts-plugin-piper
 
 ok "Plugins installed."
+
+# -------------------------------------------------------------------
+# 4b. Skills
+# -------------------------------------------------------------------
+info "Installing OVOS skills..."
+
+# Hello world (responds to "hello world", "how are you?", "thank you")
+sudo -u pi $PIP install -q ovos-skill-hello-world
+
+# Fallback unknown (catches unrecognized intents)
+sudo -u pi $PIP install -q ovos-skill-fallback-unknown
+
+ok "Skills installed."
 
 # -------------------------------------------------------------------
 # 5. Configuration
@@ -133,6 +150,21 @@ sudo -u pi tee "$CONFIG_DIR/mycroft.conf" > /dev/null <<CONF
       "listen": true,
       "sensitivity": 0.5
     }
+  },
+  "intents": {
+    "pipeline": [
+      "stop_high",
+      "converse",
+      "ovos-adapt-pipeline-plugin-high",
+      "ovos-padacioso-pipeline-plugin-high",
+      "ovos-adapt-pipeline-plugin-medium",
+      "ovos-padacioso-pipeline-plugin-medium",
+      "ovos-adapt-pipeline-plugin-low",
+      "ovos-padacioso-pipeline-plugin-low",
+      "fallback_high",
+      "fallback_medium",
+      "fallback_low"
+    ]
   },
   "stt": {
     "module": "ovos-stt-plugin-fasterwhisper",
@@ -184,6 +216,104 @@ print(f'TTS:        {list(tts.keys())}')
 " 2>/dev/null || echo "Plugin check failed"
 
 # -------------------------------------------------------------------
+# 7. Journald log rotation (circular buffer, 50MB cap, 7-day retention)
+# -------------------------------------------------------------------
+info "Configuring log rotation..."
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/pi-voice.conf <<'JCONF'
+[Journal]
+SystemMaxUse=50M
+SystemMaxFileSize=10M
+MaxRetentionSec=7day
+JCONF
+systemctl restart systemd-journald
+ok "Journald configured (50MB cap, 7-day retention)."
+
+# -------------------------------------------------------------------
+# 8. Systemd services
+# -------------------------------------------------------------------
+info "Installing systemd services..."
+
+cat > /etc/systemd/system/ovos-messagebus.service <<'SVC'
+[Unit]
+Description=OVOS Message Bus
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+ExecStart=/opt/pi-voice/.venv/bin/ovos-messagebus
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SVC
+
+cat > /etc/systemd/system/ovos-listener.service <<'SVC'
+[Unit]
+Description=OVOS Dinkum Listener
+After=network.target ovos-messagebus.service
+Requires=ovos-messagebus.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+ExecStart=/opt/pi-voice/.venv/bin/ovos-dinkum-listener
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SVC
+
+cat > /etc/systemd/system/ovos-audio.service <<'SVC'
+[Unit]
+Description=OVOS Audio Service
+After=network.target ovos-messagebus.service
+Requires=ovos-messagebus.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+ExecStart=/opt/pi-voice/.venv/bin/ovos-audio
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SVC
+
+cat > /etc/systemd/system/ovos-core.service <<'SVC'
+[Unit]
+Description=OVOS Core (skills + intent engine)
+After=network.target ovos-messagebus.service
+Requires=ovos-messagebus.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+ExecStart=/opt/pi-voice/.venv/bin/ovos-core
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SVC
+
+systemctl daemon-reload
+systemctl enable ovos-messagebus ovos-listener ovos-audio ovos-core
+systemctl start ovos-messagebus
+sleep 2
+systemctl start ovos-listener ovos-audio ovos-core
+
+ok "Systemd services installed and started."
+
+# -------------------------------------------------------------------
 # Done
 # -------------------------------------------------------------------
 echo ""
@@ -191,12 +321,10 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN} pi-voice setup complete!${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
 echo ""
-echo "  To start manually (for testing):"
-echo "    $VENV/bin/ovos-messagebus &"
-echo "    $VENV/bin/ovos-dinkum-listener"
+echo "  Services: ovos-messagebus, ovos-listener, ovos-audio, ovos-core"
+echo "  Check status: systemctl status ovos-messagebus ovos-listener ovos-audio ovos-core"
+echo "  View logs:    journalctl -u ovos-listener -f"
 echo ""
 echo "  Wake word: say 'hey mycroft'"
 echo "  Mic device: $MIC_DEVICE"
-echo ""
-echo "  TODO: systemd services for auto-start"
 echo ""
