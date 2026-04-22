@@ -44,7 +44,7 @@ comparison, component rationale, and open questions, see
 ### Backlog
 
 - Integration test framework (messagebus-level tests for skills, pipeline, STT/TTS)
-- Fix Google OAuth login on Good Morning (broken, pre-dates re-imaging)
+- ~~Fix Google OAuth login on Good Morning~~ Done: settings-based config, Site domain fix, Chromium --ozone-platform=wayland
 - Slideshow mode tweaks
 - Connect speaker and verify TTS audio output
 - Wake word customization (switch from "hey mycroft" to a custom word)
