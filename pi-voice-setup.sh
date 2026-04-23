@@ -119,6 +119,12 @@ sudo -u pi $PIP install -q ovos-skill-hello-world
 # Fallback unknown (catches unrecognized intents)
 sudo -u pi $PIP install -q ovos-skill-fallback-unknown
 
+# Timer skill (kitchen timer with Good Morning dashboard integration)
+# Installed from local source in the pi-voice repo
+if [[ -d "$APP_DIR/skills/ovos-skill-timer" ]]; then
+    sudo -u pi $PIP install -q "$APP_DIR/skills/ovos-skill-timer"
+fi
+
 ok "Skills installed."
 
 # -------------------------------------------------------------------
