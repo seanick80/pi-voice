@@ -17,6 +17,25 @@ from ovos_workshop.skills import OVOSSkill
 GM_API = "http://localhost:8000/api"
 
 
+_WORD_TO_NUM = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "forty five": 45, "forty-five": 45, "fifty": 50, "sixty": 60,
+    "ninety": 90, "a": 1, "an": 1,
+}
+
+
+def _to_num(s: str) -> int | None:
+    """Convert a digit string or word number to int."""
+    s = s.strip().lower()
+    if s.isdigit():
+        return int(s)
+    return _WORD_TO_NUM.get(s)
+
+
 def _parse_duration(message) -> int | None:
     """Extract duration in seconds from an utterance message.
 
@@ -25,6 +44,8 @@ def _parse_duration(message) -> int | None:
       "set a 10 minute timer for pasta"
       "set a 30 second timer"
       "set a timer for 1 hour and 30 minutes"
+      "set a timer for one minute"
+      "set a timer for a minute and a half"
     """
     text = message.data.get("utterance", "").lower()
     seconds = 0
@@ -32,9 +53,17 @@ def _parse_duration(message) -> int | None:
 
     import re
 
-    # Match patterns like "5 minutes", "1 hour", "30 seconds"
-    for match in re.finditer(r"(\d+)\s*(hours?|minutes?|mins?|seconds?|secs?)", text):
-        num = int(match.group(1))
+    word_nums = "|".join(k for k in _WORD_TO_NUM if " " not in k and "-" not in k)
+    num_pat = rf"(\d+|{word_nums})"
+
+    # Match patterns like "5 minutes", "one hour", "30 seconds"
+    for match in re.finditer(
+        num_pat + r"\s*(hours?|minutes?|mins?|seconds?|secs?)",
+        text,
+    ):
+        num = _to_num(match.group(1))
+        if num is None:
+            continue
         unit = match.group(2)
         if unit.startswith("hour"):
             seconds += num * 3600
@@ -43,6 +72,10 @@ def _parse_duration(message) -> int | None:
         elif unit.startswith("sec"):
             seconds += num
         found = True
+
+    # "half" after minutes → add 30 seconds
+    if found and re.search(r"and a half", text):
+        seconds += 30
 
     # Bare number — assume minutes (e.g., "set a timer for 5")
     if not found:
@@ -84,15 +117,16 @@ class TimerSkill(OVOSSkill):
 
     @classproperty
     def runtime_requirements(self):
+        # No network/internet required — API is on localhost
         return RuntimeRequirements(
             internet_before_load=False,
-            network_before_load=True,
+            network_before_load=False,
             gui_before_load=False,
             requires_internet=False,
-            requires_network=True,
+            requires_network=False,
             requires_gui=False,
             no_internet_fallback=True,
-            no_network_fallback=False,
+            no_network_fallback=True,
             no_gui_fallback=True,
         )
 
@@ -187,8 +221,22 @@ class TimerSkill(OVOSSkill):
             self.speak("There are no active timers.")
             return
 
-        # If only one, cancel it. If two, try to match by label.
         text = message.data.get("utterance", "").lower()
+
+        # "cancel all timers" — cancel everything
+        if "all" in text:
+            for t in timers:
+                try:
+                    requests.delete(f"{GM_API}/timers/{t['id']}/", timeout=5)
+                except requests.RequestException:
+                    pass
+                self._stop_alarm(t["id"])
+            count = len(timers)
+            unit = "timer" if count == 1 else "timers"
+            self.speak(f"Cancelled {count} {unit}.")
+            return
+
+        # If only one, cancel it. If two, try to match by label.
         target = None
         if len(timers) == 1:
             target = timers[0]
@@ -198,7 +246,6 @@ class TimerSkill(OVOSSkill):
                     target = t
                     break
             if not target:
-                # Cancel the first one
                 target = timers[0]
 
         try:

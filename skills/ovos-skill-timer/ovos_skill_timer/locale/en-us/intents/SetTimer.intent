@@ -1,0 +1,8 @@
+set a timer for {{duration}}
+set a {{duration}} timer
+set a {{duration}} timer for {{label}}
+set a timer for {{duration}} for {{label}}
+start a timer for {{duration}}
+start a {{duration}} timer
+start a {{duration}} timer for {{label}}
+start a timer for {{duration}} for {{label}}

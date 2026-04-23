@@ -100,7 +100,7 @@ sudo -u pi $PIP install -q ovos-ww-plugin-precise-onnx
 # Note: ovos-vad-plugin-webrtcvad uses old entrypoint and is NOT discovered.
 sudo -u pi $PIP install -q ovos-vad-plugin-silero
 
-# STT (faster-whisper — CPU-based, tiny.en model)
+# STT (faster-whisper — CPU-based, base.en model for better accuracy)
 sudo -u pi $PIP install -q ovos-stt-plugin-fasterwhisper
 
 # TTS (piper — local neural TTS)
@@ -186,7 +186,7 @@ sudo -u pi tee "$CONFIG_DIR/mycroft.conf" > /dev/null <<CONF
   "stt": {
     "module": "ovos-stt-plugin-fasterwhisper",
     "ovos-stt-plugin-fasterwhisper": {
-      "model": "tiny.en",
+      "model": "base.en",
       "beam_size": 1,
       "cpu_threads": 2
     }
