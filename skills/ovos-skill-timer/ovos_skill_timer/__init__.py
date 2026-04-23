@@ -106,10 +106,9 @@ def _parse_label(message) -> str:
 class TimerSkill(OVOSSkill):
     """Kitchen timer skill that integrates with the Good Morning dashboard."""
 
-    # Absolute path — ovos-audio can't resolve relative snd/ paths
+    # Generated two-tone alarm beep — loud enough to hear from another room
     _alarm_sound = (
-        "/opt/pi-voice/.venv/lib/python3.13/site-packages"
-        "/ovos_dinkum_listener/res/snd/acknowledge.mp3"
+        "/opt/pi-voice/alarm.wav"
     )
 
     def __init__(self, *args, **kwargs):
@@ -310,30 +309,28 @@ class TimerSkill(OVOSSkill):
         self._start_alarm(timer_id)
 
     def _start_alarm(self, timer_id: int):
-        """Play repeating ding sound until dismissed."""
+        """Play repeating alarm tone until dismissed."""
         stop_event = threading.Event()
         self._alarm_threads[timer_id] = stop_event
 
+        def _play():
+            self.bus.emit(Message(
+                "mycroft.audio.play_sound",
+                {"uri": self._alarm_sound},
+            ))
+
         def _ring():
+            # Boost volume so alarm is audible from another room
+            self.bus.emit(Message("mycroft.volume.set", {
+                "percent": 70, "play_sound": False,
+            }))
             while not stop_event.is_set():
-                self.bus.emit(
-                    Message(
-                        "mycroft.audio.play_sound",
-                        {"uri": self._alarm_sound, "force_unmute": True},
-                    )
-                )
-                # "ding ding (pause)" — play twice with short gap, then longer pause
-                stop_event.wait(0.8)
+                _play()
+                stop_event.wait(0.6)
                 if stop_event.is_set():
                     break
-                self.bus.emit(
-                    Message(
-                        "mycroft.audio.play_sound",
-                        {"uri": self._alarm_sound, "force_unmute": True},
-                    )
-                )
-                # Pause before next ding-ding
-                stop_event.wait(3.0)
+                _play()
+                stop_event.wait(2.5)
 
         t = threading.Thread(target=_ring, daemon=True)
         t.start()
