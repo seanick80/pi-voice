@@ -106,9 +106,9 @@ def _parse_label(message) -> str:
 class TimerSkill(OVOSSkill):
     """Kitchen timer skill that integrates with the Good Morning dashboard."""
 
-    # Generated two-tone alarm beep — loud enough to hear from another room
+    # Alarm sound — electronic alarm clock tone
     _alarm_sound = (
-        "/opt/pi-voice/alarm.wav"
+        "/opt/pi-voice/alarm.mp3"
     )
 
     def __init__(self, *args, **kwargs):
@@ -334,20 +334,11 @@ class TimerSkill(OVOSSkill):
             ))
 
         def _ring():
-            # Boost volume so alarm is audible from another room
-            self.bus.emit(Message("mycroft.volume.set", {
-                "percent": 70, "play_sound": False,
-            }))
             while not stop_event.is_set():
                 if not self._alarm_ducked:
                     _play()
-                    stop_event.wait(0.5)
-                    if stop_event.is_set():
-                        break
-                    if not self._alarm_ducked:
-                        _play()
-                # Long pause so the mic can hear "hey mycroft, stop"
-                stop_event.wait(5.0)
+                # Wait for sound to finish (~8s) plus pause for wake word
+                stop_event.wait(12.0)
 
         t = threading.Thread(target=_ring, daemon=True)
         t.start()
