@@ -125,7 +125,49 @@ if [[ -d "$APP_DIR/skills/ovos-skill-timer" ]]; then
     sudo -u pi $PIP install -q "$APP_DIR/skills/ovos-skill-timer"
 fi
 
+# Spotify skill (voice control for Spotify via OCP)
+sudo -u pi $PIP install -q ovos-skill-spotify ovos-media-plugin-spotify oauthlib
+
 ok "Skills installed."
+
+# -------------------------------------------------------------------
+# 4c. Spotify Connect (raspotify)
+# -------------------------------------------------------------------
+info "Installing raspotify (Spotify Connect)..."
+if ! command -v librespot &>/dev/null; then
+    curl -sL https://dtcooper.github.io/raspotify/install.sh | sh
+fi
+
+# Configure raspotify device name and quality
+sudo tee /etc/raspotify/conf > /dev/null <<'RASP'
+LIBRESPOT_NAME="Good Morning"
+LIBRESPOT_BACKEND="alsa"
+LIBRESPOT_DEVICE_TYPE="speaker"
+LIBRESPOT_BITRATE=320
+RASP
+
+# Override systemd unit for PipeWire access
+sudo mkdir -p /etc/systemd/system/raspotify.service.d
+sudo tee /etc/systemd/system/raspotify.service.d/override.conf > /dev/null <<'ROVERRIDE'
+[Service]
+User=pi
+Group=pi
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=TMPDIR=/tmp
+ProtectHome=no
+PrivateUsers=no
+PrivateTmp=no
+ReadWritePaths=/tmp
+ROVERRIDE
+
+# pipewire-alsa bridges ALSA apps to PipeWire (needed by librespot)
+apt-get install -y -qq pipewire-alsa
+
+sudo systemctl daemon-reload
+sudo systemctl enable raspotify
+sudo systemctl restart raspotify
+ok "Raspotify installed."
 
 # -------------------------------------------------------------------
 # 5. Configuration
@@ -200,11 +242,37 @@ sudo -u pi tee "$CONFIG_DIR/mycroft.conf" > /dev/null <<CONF
   "VAD": {
     "module": "ovos-vad-plugin-silero"
   },
+  "Audio": {
+    "backends": {
+      "OCP": {
+        "type": "ovos_common_play",
+        "active": true
+      },
+      "spotify": {
+        "type": "ovos_media_plugin_spotify",
+        "active": true,
+        "identifier": "Good Morning"
+      }
+    },
+    "default-backend": "OCP"
+  },
   "log_level": "INFO"
 }
 CONF
 
 ok "Configuration written to $CONFIG_DIR/mycroft.conf"
+
+# Generate alarm tone for timer skill (two-tone beep, 0.3s)
+info "Generating alarm tone..."
+sudo -u pi $VENV/bin/python -c "
+import struct, math, wave
+sr, dur = 16000, 0.3
+d = [int((0.8*math.sin(2*math.pi*880*i/sr)+0.4*math.sin(2*math.pi*1760*i/sr))*32767*0.9) for i in range(int(sr*dur))]
+with wave.open('$APP_DIR/alarm.wav','w') as f:
+    f.setnchannels(1); f.setsampwidth(2); f.setframerate(sr)
+    f.writeframes(struct.pack(f'<{len(d)}h',*d))
+"
+ok "Alarm tone generated."
 
 # -------------------------------------------------------------------
 # 6. Verify
