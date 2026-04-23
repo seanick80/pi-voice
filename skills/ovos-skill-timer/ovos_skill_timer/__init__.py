@@ -135,6 +135,20 @@ class TimerSkill(OVOSSkill):
         self.schedule_repeating_event(
             self._check_ringing, None, 5, name="timer_check",
         )
+        # Duck alarm when wake word detected so mic can hear the command
+        self.bus.on("recognizer_loop:wakeword", self._on_wakeword)
+        self._alarm_ducked = False
+
+    def _on_wakeword(self, message=None):
+        """Temporarily pause alarm sounds when wake word is heard."""
+        if not self._alarm_threads:
+            return
+        self._alarm_ducked = True
+        # Resume after 10s if not dismissed
+        threading.Timer(10.0, self._unduck_alarm).start()
+
+    def _unduck_alarm(self):
+        self._alarm_ducked = False
 
     # ── Intent handlers ──────────────────────────────────────────────
 
@@ -325,12 +339,15 @@ class TimerSkill(OVOSSkill):
                 "percent": 70, "play_sound": False,
             }))
             while not stop_event.is_set():
-                _play()
-                stop_event.wait(0.6)
-                if stop_event.is_set():
-                    break
-                _play()
-                stop_event.wait(2.5)
+                if not self._alarm_ducked:
+                    _play()
+                    stop_event.wait(0.5)
+                    if stop_event.is_set():
+                        break
+                    if not self._alarm_ducked:
+                        _play()
+                # Long pause so the mic can hear "hey mycroft, stop"
+                stop_event.wait(5.0)
 
         t = threading.Thread(target=_ring, daemon=True)
         t.start()

@@ -126,7 +126,7 @@ if [[ -d "$APP_DIR/skills/ovos-skill-timer" ]]; then
 fi
 
 # Spotify skill (voice control for Spotify via OCP)
-sudo -u pi $PIP install -q ovos-skill-spotify ovos-media-plugin-spotify oauthlib
+sudo -u pi $PIP install -q ovos-skill-spotify ovos-media-plugin-spotify oauthlib ovos-ocp-pipeline-plugin
 
 ok "Skills installed."
 
@@ -220,6 +220,7 @@ sudo -u pi tee "$CONFIG_DIR/mycroft.conf" > /dev/null <<CONF
       "ovos-padacioso-pipeline-plugin-medium",
       "ovos-adapt-pipeline-plugin-low",
       "ovos-padacioso-pipeline-plugin-low",
+      "ovos-ocp-pipeline-plugin",
       "fallback_high",
       "fallback_medium",
       "fallback_low"
