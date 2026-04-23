@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timezone
 
 import requests
+from ovos_bus_client import Message
 from ovos_utils import classproperty
 from ovos_utils.log import LOG
 from ovos_utils.process_utils import RuntimeRequirements
@@ -316,7 +317,7 @@ class TimerSkill(OVOSSkill):
         def _ring():
             while not stop_event.is_set():
                 self.bus.emit(
-                    self.bus.Message(
+                    Message(
                         "mycroft.audio.play_sound",
                         {"uri": self._alarm_sound, "force_unmute": True},
                     )
@@ -326,7 +327,7 @@ class TimerSkill(OVOSSkill):
                 if stop_event.is_set():
                     break
                 self.bus.emit(
-                    self.bus.Message(
+                    Message(
                         "mycroft.audio.play_sound",
                         {"uri": self._alarm_sound, "force_unmute": True},
                     )
