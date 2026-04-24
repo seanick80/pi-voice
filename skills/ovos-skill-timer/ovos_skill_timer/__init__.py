@@ -242,20 +242,26 @@ class TimerSkill(OVOSSkill):
     @intent_handler("CancelTimer.intent")
     def handle_cancel_timer(self, message):
         timers = self._get_active_timers()
-        if not timers:
+        if not timers and not self._alarm_threads:
             self.speak("There are no active timers.")
+            return
+
+        # If no API timers but alarm threads exist, hard-stop them
+        if not timers:
+            self._stop_all_alarms()
+            self.speak("Timer dismissed.")
             return
 
         text = message.data.get("utterance", "").lower()
 
-        # "cancel all timers" — cancel everything
+        # "cancel/dismiss all" — cancel everything
         if "all" in text:
             for t in timers:
                 try:
                     requests.delete(f"{GM_API}/timers/{t['id']}/", timeout=5)
                 except requests.RequestException:
                     pass
-                self._stop_alarm(t["id"])
+            self._stop_all_alarms()
             count = len(timers)
             unit = "timer" if count == 1 else "timers"
             self.speak(f"Cancelled {count} {unit}.")
