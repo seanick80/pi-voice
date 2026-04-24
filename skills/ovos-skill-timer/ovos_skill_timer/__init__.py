@@ -114,6 +114,9 @@ class TimerSkill(OVOSSkill):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._alarm_threads: dict[int, threading.Event] = {}
+        self._alarm_lock = threading.Lock()
+        self._duck_event = threading.Event()
+        self._unduck_timer: threading.Timer | None = None
 
     @classproperty
     def runtime_requirements(self):
@@ -143,12 +146,20 @@ class TimerSkill(OVOSSkill):
         """Temporarily pause alarm sounds when wake word is heard."""
         if not self._alarm_threads:
             return
+        LOG.info("Timer alarm ducked for wakeword")
         self._alarm_ducked = True
+        # Interrupt any in-progress wait so the thread sees ducked=True now
+        self._duck_event.set()
         # Resume after 10s if not dismissed
-        threading.Timer(10.0, self._unduck_alarm).start()
+        if self._unduck_timer:
+            self._unduck_timer.cancel()
+        self._unduck_timer = threading.Timer(10.0, self._unduck_alarm)
+        self._unduck_timer.start()
 
     def _unduck_alarm(self):
+        LOG.info("Timer alarm un-ducked")
         self._alarm_ducked = False
+        self._duck_event.clear()
 
     # ── Intent handlers ──────────────────────────────────────────────
 
@@ -275,37 +286,38 @@ class TimerSkill(OVOSSkill):
     @intent_handler("StopTimer.intent")
     def handle_stop_timer(self, message):
         """Dismiss ringing timers (stop the alarm)."""
+        had_alarms = bool(self._alarm_threads)
         ringing = [
             t for t in self._get_active_timers() if t["status"] == "ringing"
         ]
-        if not ringing:
-            # Maybe they mean cancel
+        if not ringing and not had_alarms:
+            # Nothing ringing — maybe they mean cancel
             return self.handle_cancel_timer(message)
 
         try:
             requests.post(f"{GM_API}/timers/dismiss/", timeout=5)
         except requests.RequestException:
-            self.speak("Sorry, I couldn't dismiss the timers.")
-            return
+            LOG.warning("Could not reach dismiss API")
 
-        for t in ringing:
-            self._stop_alarm(t["id"])
+        # Hard-stop all local alarm threads
+        self._stop_all_alarms()
         self.speak("Timer dismissed.")
 
     def stop(self) -> bool:
-        """Handle global 'stop' command — dismiss ringing timers."""
-        ringing = [
-            t for t in self._get_active_timers() if t["status"] == "ringing"
-        ]
-        if not ringing:
-            return False
+        """Handle global 'stop' command — dismiss ringing timers.
+
+        Always kills local alarm threads even if API call fails,
+        so the sound stops regardless.
+        """
+        had_alarms = bool(self._alarm_threads)
+        # Try to dismiss in the backend (best-effort)
         try:
             requests.post(f"{GM_API}/timers/dismiss/", timeout=5)
         except requests.RequestException:
-            return False
-        for t in ringing:
-            self._stop_alarm(t["id"])
-        return True
+            LOG.warning("Could not reach dismiss API")
+        # Hard-stop all local alarm threads unconditionally
+        self._stop_all_alarms()
+        return had_alarms
 
     # ── Timer expiry & alarm ─────────────────────────────────────────
 
@@ -322,40 +334,72 @@ class TimerSkill(OVOSSkill):
         # Start repeating alarm sound
         self._start_alarm(timer_id)
 
-    def _start_alarm(self, timer_id: int):
-        """Play repeating alarm tone until dismissed."""
-        stop_event = threading.Event()
-        self._alarm_threads[timer_id] = stop_event
+    def _start_alarm(self, timer_id: int) -> None:
+        """Play repeating alarm tone until dismissed. Idempotent."""
+        with self._alarm_lock:
+            if timer_id in self._alarm_threads:
+                return  # Already ringing — don't spawn a second thread
+            stop_event = threading.Event()
+            self._alarm_threads[timer_id] = stop_event
 
-        def _play():
+        def _play() -> None:
             self.bus.emit(Message(
                 "mycroft.audio.play_sound",
                 {"uri": self._alarm_sound},
             ))
 
-        def _ring():
+        def _ring() -> None:
             while not stop_event.is_set():
                 if not self._alarm_ducked:
                     _play()
-                # Wait for sound to finish (~8s) plus pause for wake word
-                stop_event.wait(12.0)
+                    # Wait for sound (~8s) plus pause, but wake up
+                    # early if ducked or stopped
+                    for _ in range(24):  # 24 × 0.5s = 12s max
+                        if stop_event.is_set() or self._duck_event.is_set():
+                            break
+                        stop_event.wait(0.5)
+                else:
+                    # While ducked, check frequently for un-duck or stop
+                    stop_event.wait(0.5)
 
         t = threading.Thread(target=_ring, daemon=True)
         t.start()
 
-    def _stop_alarm(self, timer_id: int):
+    def _stop_alarm(self, timer_id: int) -> None:
         """Stop the repeating alarm for a timer."""
-        stop_event = self._alarm_threads.pop(timer_id, None)
+        with self._alarm_lock:
+            stop_event = self._alarm_threads.pop(timer_id, None)
         if stop_event:
             stop_event.set()
 
-    def _check_ringing(self, message=None):
-        """Periodic check: if any timers transitioned to ringing, start alarms."""
-        for t in self._get_active_timers():
+    def _stop_all_alarms(self) -> None:
+        """Hard-stop every active alarm thread."""
+        with self._alarm_lock:
+            events = list(self._alarm_threads.values())
+            self._alarm_threads.clear()
+        for ev in events:
+            ev.set()
+
+    def _check_ringing(self, message=None) -> None:
+        """Periodic check: start alarms for newly ringing timers,
+        stop alarms for timers dismissed via dashboard."""
+        active = self._get_active_timers()
+        ringing_ids = {t["id"] for t in active if t["status"] == "ringing"}
+
+        # Start alarms for newly ringing timers
+        for t in active:
             if t["status"] == "ringing" and t["id"] not in self._alarm_threads:
                 label = t["label"] or "Your timer"
                 self.speak(f"{label} is done!")
                 self._start_alarm(t["id"])
+
+        # Stop alarms for timers that were dismissed externally (e.g. dashboard)
+        with self._alarm_lock:
+            orphaned = [
+                tid for tid in self._alarm_threads if tid not in ringing_ids
+            ]
+        for tid in orphaned:
+            self._stop_alarm(tid)
 
     # ── API helpers ──────────────────────────────────────────────────
 

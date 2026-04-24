@@ -6,7 +6,7 @@ Voice assistant running on Raspberry Pi 5 with OVOS (OpenVoiceOS) and Hailo AI H
 
 A general-purpose voice recognition and action platform for Raspberry Pi 5.
 Uses OVOS for the voice pipeline (wake word → STT → intent → skill → TTS)
-with the Hailo accelerator planned for Whisper STT offload.
+with the Hailo-10H NPU running Whisper base for hardware-accelerated STT.
 
 Integrates with the [Good Morning Dashboard](https://github.com/seanick80/goodmorning)
 for display-based actions (timers, weather readout, recipe display, etc.).
@@ -16,18 +16,33 @@ for display-based actions (timers, weather readout, recipe display, etc.).
 - Raspberry Pi 5, 4GB RAM, Debian Trixie 64-bit
 - Hailo AI HAT+ 2 (Hailo-10H, PCIe)
 - USB webcam with microphone (plughw:2,0)
-- Speaker (USB, 3.5mm, or HDMI) — for TTS output
+- Bluetooth speaker (bonelk)
 
 ## Voice Pipeline
 
 ```
 Mic → precise-onnx wake word ("hey mycroft", CPU)
-    → faster-whisper STT (tiny.en, CPU — Hailo TODO)
+    → Whisper base STT (Hailo-10H NPU via hailo_stt_server)
     → OVOS intent pipeline (Adapt → Padacioso → Fallback)
     → Skill dispatch
     → Piper TTS (en_US-lessac-medium, CPU)
-    → Speaker
+    → BT Speaker
 ```
+
+### STT Architecture
+
+The Hailo Whisper pipeline requires torch/transformers/hailo_platform (~600MB RSS).
+Loading these into the OVOS listener process (4GB Pi) causes swap thrashing and
+freezes the audio loop. Instead, we run a separate HTTP server:
+
+```
+OVOS listener → ovos-stt-plugin-server → http://127.0.0.1:8080/stt → hailo_stt_server.py
+                (lightweight HTTP client)   (separate process, hailo-apps venv)
+```
+
+- `hailo_stt_server.py` — standalone HTTP server wrapping the Hailo WhisperPipeline
+- `hailo-stt.service` — systemd service running the server on boot
+- OVOS config uses `ovos-stt-plugin-server` pointing at `http://127.0.0.1:8080/stt`
 
 ## Installation
 
@@ -52,10 +67,13 @@ MIC_DEVICE=plughw:1,0 sudo bash /opt/pi-voice/pi-voice-setup.sh
 
 ```bash
 # Check status
-systemctl status ovos-messagebus ovos-listener ovos-audio ovos-core
+systemctl status ovos-messagebus ovos-listener ovos-audio ovos-core hailo-stt
 
 # View listener logs (wake word + STT activity)
 journalctl -u ovos-listener -f
+
+# View Hailo STT server logs
+journalctl -u hailo-stt -f
 
 # View all OVOS logs
 journalctl -u ovos-messagebus -u ovos-listener -u ovos-audio -u ovos-core -f
@@ -64,36 +82,34 @@ journalctl -u ovos-messagebus -u ovos-listener -u ovos-audio -u ovos-core -f
 sudo systemctl restart ovos-messagebus ovos-listener ovos-audio ovos-core
 ```
 
+## Skills
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| Timer | "set a timer for 5 minutes" | Kitchen timer with alarm, integrates with Good Morning dashboard |
+| Spotify | "play [song/artist]" | Spotify playback via OCP + raspotify |
+
 ## Testing
 
 Say "hey mycroft" near the webcam mic, then say one of:
-- "hello world"
-- "how are you"
-- "thank you"
+- "set a timer for 10 seconds"
+- "what time is it"
+- "play some music"
 
 Check logs for activity:
 ```bash
 journalctl -u ovos-listener -u ovos-core --since '1 min ago' --no-pager
 ```
 
-Send a test utterance programmatically (bypasses microphone):
-```python
-from ovos_bus_client import MessageBusClient, Message
-import time
-client = MessageBusClient()
-client.run_in_thread()
-time.sleep(2)
-client.emit(Message('recognizer_loop:utterance',
-    {'utterances': ['hello world'], 'lang': 'en-us'}))
-```
-
 ## Project Structure
 
 ```
-pi-voice-setup.sh         # Reproducible installation script
-execution-plan.md          # Phased plan and status tracking
-voice-assistant-research.md # Platform comparison and architecture decisions
-hailo/                     # Hailo AI HAT demos (YOLOv8m webcam)
+pi-voice-setup.sh                          # Reproducible installation script
+skills/ovos-skill-timer/                   # Kitchen timer skill
+plugins/ovos-stt-plugin-hailo/             # Hailo Whisper STT (plugin + HTTP server)
+hailo/                                     # Hailo AI HAT demos (YOLOv8m webcam)
+execution-plan.md                          # Phased plan and status tracking
+voice-assistant-research.md                # Platform comparison decisions
 ```
 
 ## Status
