@@ -1,13 +1,16 @@
 #!/opt/pi-voice/.venv/bin/python3
 """Complete the Spotify OAuth token exchange from the saved redirect URL."""
 import os
+import sys
 from os.path import join
 from ovos_utils.oauth import OAuthTokenDatabase, OAuthApplicationDatabase
 from ovos_utils.xdg_utils import xdg_config_home
 from spotipy import SpotifyOAuth
 
-CLIENT_ID = "6de42706ac1f4e0d90644ce4e9f67fbe"
-CLIENT_SECRET = "452eafc79236466892999767eb0ee72a"
+CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
+CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+if not CLIENT_ID or not CLIENT_SECRET:
+    sys.exit("Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET env vars (or use .env)")
 REDIRECT_URI = "https://127.0.0.1:8888"
 SCOPE = "user-library-read streaming playlist-read-private user-top-read user-read-playback-state"
 TOKEN_ID = "ocp_spotify"
