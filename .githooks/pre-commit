@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Pre-commit hook: block commits containing secrets (32-char hex strings).
+
+DIFF=$(git diff --cached -U0 --diff-filter=ACM | grep '^+' | grep -v '^+++')
+
+if echo "$DIFF" | grep -qEi '[0-9a-f]{32}'; then
+    echo "BLOCKED: Possible secret detected in staged changes:"
+    echo "$DIFF" | grep -Ei '[0-9a-f]{32}'
+    echo ""
+    echo "If this is a false positive, use: git commit --no-verify"
+    exit 1
+fi
